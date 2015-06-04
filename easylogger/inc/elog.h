@@ -55,8 +55,9 @@ extern "C" {
 /* output filter's keyword max length */
 #define ELOG_FILTER_KW_MAX_LEN               16
 /* keyword alpha len max */
-#define ELOG_KW_ALPHA_MAX_LEN                96 /* do not exchange this two define*/
-#define ELOG_KW_ALOHA_BASE                   32
+#define ELOG_TG_ALPHA_MAX_LEN                96 /* do not exchange this two define*/
+#define ELOG_KW_ALPHA_MAX_LEN                96
+#define ELOG_KW_ALPHA_BASE                   32
 /* EasyLogger software version number */
 #define ELOG_SW_VERSION                      "0.05.25"
 
@@ -163,13 +164,16 @@ int elog_kw_alpha_set( char *src, const char *des );
 int elog_kw_strstr(const char *src, const char *des, const char *alpha);
 
 /* elog_port.c */
+#define	_ELOG_SYNC_t			      xSemaphoreHandle
 ElogErrCode elog_port_init(void);
 void elog_port_output(const char *output, size_t size);
-void elog_port_output_lock(void);
-void elog_port_output_unlock(void);
 const char *elog_port_get_time(void);
 const char *elog_port_get_p_info(void);
 const char *elog_port_get_t_info(void);
+int  elog_port_cre_syncobj (_ELOG_SYNC_t* sobj);	                        /* Create a sync object */
+int  elog_port_req_grant   (_ELOG_SYNC_t sobj);				        /* Lock sync object */
+void elog_port_rel_grant   (_ELOG_SYNC_t sobj);				        /* Unlock sync object */
+int  elog_port_del_syncobj (_ELOG_SYNC_t sobj);				        /* Delete a sync object */
 
 ElogErrCode elog_port_open();
 ElogErrCode elog_port_close();
