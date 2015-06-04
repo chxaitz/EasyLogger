@@ -25,6 +25,10 @@
 #include "usart.h"
 #include "rtc.h"
 
+/* Identifier of sync object */
+#define _ELOG_TIMEOUT   100
+_ELOG_SYNC_t	sobj;
+
 /**
  * EasyLogger port initialize
  *
@@ -45,17 +49,6 @@ void elog_port_output(const char *output, size_t size) {
     //TODO output to flash
 }
 
-/**
- * output lock
- */
-void elog_port_output_lock(void) {
-}
-
-/**
- * output unlock
- */
-void elog_port_output_unlock(void) {
-}
 /* be modified   at 2015-06-04 17:09 by chxaitz */
 /**
  * get current time interface
@@ -87,6 +80,9 @@ const char *elog_port_get_p_info(void) {
 const char *elog_port_get_t_info(void) {
     return "";
 }
+/*------------------------------------------------------------------------*/
+// communication with the device stream
+/*------------------------------------------------------------------------*/
 /* be added   at 2015-06-04 17:09 by chxaitz */
 /**
  * open then output stream device
@@ -114,4 +110,60 @@ ElogErrCode elog_port_close()
 {
   ElogErrCode res = ELOG_NO_ERR;
   return res;
+}
+
+/*------------------------------------------------------------------------*/
+// four funcs about Synchronization Object
+/*------------------------------------------------------------------------*/
+/* Create a sync object */
+int  elog_port_cre_syncobj (_ELOG_SYNC_t* sobj)
+{
+  int ret;
+
+//  ret = (int)(WaitForSingleObject(sobj, _ELOG_TIMEOUT) == WAIT_OBJECT_0);       /* Win32 */
+
+//  OSMutexPend(sobj, _ELOG_TIMEOUT, &err));              /* uC/OS-II */
+//  ret = (int)(err == OS_NO_ERR);
+
+  ret = (int)(xSemaphoreTake(sobj, _ELOG_TIMEOUT) == pdTRUE);     /* FreeRTOS */
+
+  return ret;
+}
+/* Lock sync object */
+int  elog_port_req_grant   (_ELOG_SYNC_t sobj)
+{
+  int ret;
+
+//  ret = (int)(WaitForSingleObject(sobj, _ELOG_TIMEOUT) == WAIT_OBJECT_0);       /* Win32 */
+
+//  OSMutexPend(sobj, _ELOG_TIMEOUT, &err));      /* uC/OS-II */
+//  ret = (int)(err == OS_NO_ERR);
+
+  ret = (int)(xSemaphoreTake(sobj, _ELOG_TIMEOUT) == pdTRUE);     /* FreeRTOS */
+
+  return ret;
+}
+/* Unlock sync object */
+void elog_port_rel_grant   (_ELOG_SYNC_t sobj)
+{
+//  ReleaseMutex(sobj);           /* Win32 */
+
+//  OSMutexPost(sobj);            /* uC/OS-II */
+
+  xSemaphoreGive(sobj);	        /* FreeRTOS */
+}
+/* Delete a sync object */
+int  elog_port_del_syncobj (_ELOG_SYNC_t sobj)
+{
+  int ret;
+
+//  ret = CloseHandle(sobj);              /* Win32 */
+
+//  OSMutexDel(sobj, OS_DEL_ALWAYS, &err);	/* uC/OS-II */
+//  ret = (int)(err == OS_NO_ERR);
+
+  vSemaphoreDelete(sobj);               /* FreeRTOS */
+  ret = 1;
+
+  return ret;
 }
