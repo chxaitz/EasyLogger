@@ -68,6 +68,7 @@ static elog_node *elog_list_head,*elog_list_tail;
 static size_t elog_nodes_count;
 static size_t elog_take_sapce;
 static char *pc_elog_kw_alpha;
+_ELOG_SYNC_t    elog_sobj;
 //static bool get_fmt_enabled(uint8_t level, uint8_t set);                      /* be deleted   at 2015-06-04 17:09 by chxaitz */
 
 /**
@@ -92,6 +93,9 @@ ElogErrCode elog_init(void) {
     /* enable output */
     elog_set_output_enabled(true);
 
+    /* create sync obj*/
+    elog_port_cre_syncobj ( elog_sobj );
+    
     if (result == ELOG_NO_ERR) {
         elog_d(tag, "EasyLogger V%s is initialize success.", ELOG_SW_VERSION);
     } else {
@@ -205,7 +209,8 @@ void elog_raw(const char *format, ...) {
     va_start(args, format);
 
     /* lock output */
-    elog_port_output_lock();
+//    elog_port_output_lock();
+    elog_port_req_grant(elog_sobj);
 
     /* package log data to buffer */
     fmt_result = vsnprintf(log_buf, ELOG_BUF_SIZE, format, args);
@@ -220,7 +225,8 @@ void elog_raw(const char *format, ...) {
     }
 
     /* unlock output */
-    elog_port_output_unlock();
+//    elog_port_output_unlock();
+    elog_port_rel_grant(elog_sobj);
 
     va_end(args);
 }
@@ -261,7 +267,8 @@ void elog_add(uint8_t level, const char *tag, const char *file, const char *func
     }
 
     /* lock output */
-    elog_port_output_lock();
+//    elog_port_output_lock();
+    elog_port_req_grant(elog_sobj);
     /* package level info */
     if (elog.enabled_fmt_set[level]&(ELOG_FMT_LVL)) {
         log_len += elog_strcpy(log_len, log_buf + log_len, level_output_info[level]);
@@ -396,7 +403,8 @@ void elog_add(uint8_t level, const char *tag, const char *file, const char *func
     }
 
     /* unlock output */
-    elog_port_output_unlock();
+//    elog_port_output_unlock();
+    elog_port_rel_grant(elog_sobj);
 }
 /* be added   at 2015-06-04 17:09 by chxaitz */
 /**
