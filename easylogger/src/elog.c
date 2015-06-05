@@ -35,8 +35,8 @@ typedef struct {
 /* easy logger */
 typedef struct {
     ElogFilter filter;
-    size_t enabled_fmt_set;
-    bool output_enabled;
+    uint8_t enabled_fmt_set[6];                                                 /* be modified   at 2015-06-04 17:09 by chxaitz */
+    bool    output_enabled;
 }EasyLogger, *EasyLogger_t;
 
 /* EasyLogger object */
@@ -54,7 +54,22 @@ static const char *level_output_info[] = {
         "D/",
         "V/",
 };
-static bool get_fmt_enabled(size_t set);
+
+/* be added   at 2015-06-04 17:09 by chxaitz */
+/* expand var & func by chxaitz */
+typedef struct elog_node
+{
+  struct elog_node *pNext;
+         size_t     len;
+         char       Data[0];
+}elog_node;
+
+static elog_node *elog_list_head,*elog_list_tail;
+static size_t elog_nodes_count;
+static size_t elog_take_sapce;
+static char *pc_elog_kw_alpha;
+_ELOG_SYNC_t    elog_sobj;
+//static bool get_fmt_enabled(uint8_t level, uint8_t set);                      /* be deleted   at 2015-06-04 17:09 by chxaitz */
 
 /**
  * EasyLogger initialize.
@@ -66,11 +81,21 @@ ElogErrCode elog_init(void) {
 
     /* port initialize */
     result = elog_port_init();
+    /* default Fmt value */
+    elog.enabled_fmt_set[ELOG_LVL_ASSERT]=ELOG_FMT_LVL|ELOG_FMT_TAG|ELOG_FMT_TIME/*|ELOG_FMT_P_INFO|ELOG_FMT_T_INFO*/|ELOG_FMT_DIR|ELOG_FMT_FUNC|ELOG_FMT_LINE;
+    elog.enabled_fmt_set[ELOG_LVL_ERROR]=ELOG_FMT_LVL|ELOG_FMT_TAG|ELOG_FMT_TIME/*|ELOG_FMT_P_INFO|ELOG_FMT_T_INFO|ELOG_FMT_DIR*/|ELOG_FMT_FUNC/*|ELOG_FMT_LINE*/;
+    elog.enabled_fmt_set[ELOG_LVL_WARN]=ELOG_FMT_LVL|ELOG_FMT_TAG|ELOG_FMT_TIME/*|ELOG_FMT_P_INFO|ELOG_FMT_T_INFO|ELOG_FMT_DIR*/|ELOG_FMT_FUNC/*|ELOG_FMT_LINE*/;
+    elog.enabled_fmt_set[ELOG_LVL_INFO]=ELOG_FMT_LVL|ELOG_FMT_TAG|ELOG_FMT_TIME;
+    elog.enabled_fmt_set[ELOG_LVL_DEBUG]=ELOG_FMT_LVL|ELOG_FMT_TAG|ELOG_FMT_TIME;
+    elog.enabled_fmt_set[ELOG_LVL_VERBOSE]=ELOG_FMT_LVL|ELOG_FMT_TAG|ELOG_FMT_TIME;
     /* set level is ELOG_LVL_VERBOSE */
     elog_set_filter_lvl(ELOG_LVL_VERBOSE);
     /* enable output */
     elog_set_output_enabled(true);
 
+    /* create sync obj*/
+    elog_port_cre_syncobj ( &elog_sobj );
+    
     if (result == ELOG_NO_ERR) {
         elog_d(tag, "EasyLogger V%s is initialize success.", ELOG_SW_VERSION);
     } else {
@@ -87,7 +112,18 @@ ElogErrCode elog_init(void) {
 void elog_set_output_enabled(bool enabled) {
     ELOG_ASSERT((enabled == false) || (enabled == true));
 
-    elog.output_enabled = enabled;
+    if( elog.output_enabled != enabled ) /* not equ */
+    {
+      if( false == enabled )    /* close the elog */
+      { 
+        /* if need to free the kw_filter space? */
+        /* compulsory to write the logs to the stream and free the taked space */
+        elog_output();
+      }
+      else      /* open the elog */
+      {/* nothing need to do */}
+      elog.output_enabled = enabled;
+    }
 }
 
 /**
@@ -104,8 +140,8 @@ bool elog_get_output_enabled(void) {
  *
  * @param set format set
  */
-void elog_set_fmt(size_t set) {
-    elog.enabled_fmt_set = set;
+void elog_set_fmt( uint8_t level, uint8_t set) {
+    elog.enabled_fmt_set[level] = set;
 }
 
 /**
@@ -149,7 +185,20 @@ void elog_set_filter_tag(const char *tag) {
  * @param keyword keyword
  */
 void elog_set_filter_kw(const char *keyword) {
+  if( *keyword )        /* if not null */
+  {
+    if( NULL == pc_elog_kw_alpha )
+      if( (pc_elog_kw_alpha=_elog_malloc(ELOG_KW_ALPHA_MAX_LEN))==NULL )   /* apply mem*/
+        return;
     strncpy(elog.filter.keyword, keyword, ELOG_FILTER_KW_MAX_LEN);
+    elog_kw_alpha_set( pc_elog_kw_alpha, keyword );
+  }
+  else                  /* if null */
+  {
+    if( pc_elog_kw_alpha ) /* free the applyed mem */
+    { _elog_free( pc_elog_kw_alpha ); pc_elog_kw_alpha = NULL; elog.filter.keyword[0]='\0';}
+  }
+  return;
 }
 
 /**
@@ -171,22 +220,44 @@ void elog_raw(const char *format, ...) {
     va_start(args, format);
 
     /* lock output */
-    elog_port_output_lock();
+    elog_port_req_grant(elog_sobj);
 
     /* package log data to buffer */
     fmt_result = vsnprintf(log_buf, ELOG_BUF_SIZE, format, args);
 
     /* output converted log */
-    if ((fmt_result > -1) && (fmt_result <= ELOG_BUF_SIZE)) {
-        /* output log */
-        elog_port_output(log_buf, fmt_result);
-    } else {
-        /* output log */
-        elog_port_output(log_buf, ELOG_BUF_SIZE);
+    if ((fmt_result > -1) && (fmt_result < ELOG_BUF_SIZE)) {
+      log_buf[fmt_result++]='\0';
+      /* add log to log_nodes list */                                           /* be added   at 2015-06-04 17:09 by chxaitz */
+      elog_node *px_eln;
+      if((px_eln = (elog_node*)_elog_malloc( sizeof(elog)+fmt_result ))!=NULL)
+      {
+        /* init the node */
+        px_eln->pNext = NULL;
+        px_eln->len   = fmt_result;
+        memcpy( px_eln->Data, log_buf, fmt_result );
+        
+        /* add to the logs' list */
+        _elog_enter_critical();
+        if( elog_list_head == NULL )       //empty list
+        {
+          elog_list_head = px_eln;
+          elog_list_tail = px_eln;
+        }
+        else/* unempty list */
+        {
+          elog_list_tail->pNext = px_eln;
+          elog_list_tail        = px_eln;
+        }
+        _elog_exit_critical();
+        /* update some data */
+        elog_nodes_count++;
+        elog_take_sapce+=fmt_result;
+      }
     }
 
     /* unlock output */
-    elog_port_output_unlock();
+    elog_port_rel_grant(elog_sobj);
 
     va_end(args);
 }
@@ -203,10 +274,10 @@ void elog_raw(const char *format, ...) {
  * @param ... args
  *
  */
-void elog_output(uint8_t level, const char *tag, const char *file, const char *func,
+void elog_add(uint8_t level, const char *tag, const char *file, const char *func,
         const long line, const char *format, ...) {
     size_t tag_len = strlen(tag), log_len = 0;
-    char line_num[ELOG_LINE_NUM_MAX_LEN + 1] = { 0 };
+//    char line_num[ELOG_LINE_NUM_MAX_LEN + 1] = { 0 };                         /* be deleted at 2015-06-04 17:09 by chxaitz */
     char tag_sapce[ELOG_FILTER_TAG_MAX_LEN / 2 + 1] = { 0 };
     va_list args;
     int fmt_result;
@@ -222,128 +293,210 @@ void elog_output(uint8_t level, const char *tag, const char *file, const char *f
     if (level > elog.filter.level) {
         return;
     } else if (!strstr(tag, elog.filter.tag)) { /* tag filter */
-        //TODO 可以考虑采用KMP及朴素模式匹配字符串，提升性能
+        //TODO 鍙互鑰冭檻閲囩敤KMP鍙婃湸绱犳ā寮忓尮閰嶅瓧绗︿覆锛屾彁鍗囨�ц兘
         return;
     }
 
-    /* args point to the first variable parameter */
-    va_start(args, format);
-
     /* lock output */
-    elog_port_output_lock();
+    elog_port_req_grant(elog_sobj);
     /* package level info */
-    if (get_fmt_enabled(ELOG_FMT_LVL)) {
+    if (elog.enabled_fmt_set[level]&(ELOG_FMT_LVL)) {
         log_len += elog_strcpy(log_len, log_buf + log_len, level_output_info[level]);
     }
     /* package tag info */
-    if (get_fmt_enabled(ELOG_FMT_TAG)) {
+    if (elog.enabled_fmt_set[level]&(ELOG_FMT_TAG)) {
         log_len += elog_strcpy(log_len, log_buf + log_len, tag);
         /* if the tag length is less than 50% ELOG_FILTER_TAG_MAX_LEN, then fill space */
         if (tag_len <= ELOG_FILTER_TAG_MAX_LEN / 2) {
             memset(tag_sapce, ' ', ELOG_FILTER_TAG_MAX_LEN / 2 - tag_len);
             log_len += elog_strcpy(log_len, log_buf + log_len, tag_sapce);
         }
-        log_len += elog_strcpy(log_len, log_buf + log_len, " ");
+//        log_len += elog_strcpy(log_len, log_buf + log_len, " ");              /* be deleted at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len++]=' ';                                                 /* be added   at 2015-06-04 17:09 by chxaitz */
     }
     /* package time, process and thread info */
-    if (get_fmt_enabled(ELOG_FMT_TIME) || get_fmt_enabled(ELOG_FMT_P_INFO)
-            || get_fmt_enabled(ELOG_FMT_T_INFO)) {
-        log_len += elog_strcpy(log_len, log_buf + log_len, "[");
+    if (elog.enabled_fmt_set[level]&(ELOG_FMT_TIME|ELOG_FMT_P_INFO|ELOG_FMT_T_INFO)) {
+//        log_len += elog_strcpy(log_len, log_buf + log_len, "[");              /* be deleted at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len++]='[';                                                 /* be added   at 2015-06-04 17:09 by chxaitz */
         /* package time info */
-        if (get_fmt_enabled(ELOG_FMT_TIME)) {
+        if (elog.enabled_fmt_set[level]&(ELOG_FMT_TIME)) {
             log_len += elog_strcpy(log_len, log_buf + log_len, elog_port_get_time());
-            if (get_fmt_enabled(ELOG_FMT_P_INFO) || get_fmt_enabled(ELOG_FMT_T_INFO)) {
-                log_len += elog_strcpy(log_len, log_buf + log_len, " ");
+            if (elog.enabled_fmt_set[level]&(ELOG_FMT_P_INFO|ELOG_FMT_T_INFO)) {
+//                log_len += elog_strcpy(log_len, log_buf + log_len, " ");      /* be deleted at 2015-06-04 17:09 by chxaitz */
+                log_buf[log_len++]=' ';                                         /* be added   at 2015-06-04 17:09 by chxaitz */
             }
         }
         /* package process info */
-        if (get_fmt_enabled(ELOG_FMT_P_INFO)) {
+        if (elog.enabled_fmt_set[level]&(ELOG_FMT_P_INFO)) {
             log_len += elog_strcpy(log_len, log_buf + log_len, elog_port_get_p_info());
-            if (get_fmt_enabled(ELOG_FMT_T_INFO)) {
-                log_len += elog_strcpy(log_len, log_buf + log_len, " ");
+            if (elog.enabled_fmt_set[level]&(ELOG_FMT_T_INFO)) {
+//                log_len += elog_strcpy(log_len, log_buf + log_len, " ");      /* be deleted at 2015-06-04 17:09 by chxaitz */
+              log_buf[log_len++]=' ';
             }
         }
         /* package thread info */
-        if (get_fmt_enabled(ELOG_FMT_T_INFO)) {
+        if (elog.enabled_fmt_set[level]&(ELOG_FMT_T_INFO)) {
             log_len += elog_strcpy(log_len, log_buf + log_len, elog_port_get_t_info());
         }
-        log_len += elog_strcpy(log_len, log_buf + log_len, "] ");
+//        log_len += elog_strcpy(log_len, log_buf + log_len, "] ");             /* be deleted at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len++]=']';log_buf[log_len++]=' ';                          /* be added   at 2015-06-04 17:09 by chxaitz */
     }
     /* package file directory and name, function name and line number info */
-    if (get_fmt_enabled(ELOG_FMT_DIR) || get_fmt_enabled(ELOG_FMT_FUNC)
-            || get_fmt_enabled(ELOG_FMT_LINE)) {
-        log_len += elog_strcpy(log_len, log_buf + log_len, "(");
+    if (elog.enabled_fmt_set[level]&(ELOG_FMT_DIR|ELOG_FMT_FUNC|ELOG_FMT_LINE)) {
+//        log_len += elog_strcpy(log_len, log_buf + log_len, "(");              /* be deleted at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len++]='(';                                                 /* be added   at 2015-06-04 17:09 by chxaitz */
         /* package time info */
-        if (get_fmt_enabled(ELOG_FMT_DIR)) {
+        if (elog.enabled_fmt_set[level]&(ELOG_FMT_DIR)) {
             log_len += elog_strcpy(log_len, log_buf + log_len, file);
-            if (get_fmt_enabled(ELOG_FMT_FUNC)) {
-                log_len += elog_strcpy(log_len, log_buf + log_len, " ");
-            } else if (get_fmt_enabled(ELOG_FMT_LINE)) {
-                log_len += elog_strcpy(log_len, log_buf + log_len, ":");
+            if (elog.enabled_fmt_set[level]&(ELOG_FMT_FUNC)) {
+//                log_len += elog_strcpy(log_len, log_buf + log_len, " ");      /* be deleted at 2015-06-04 17:09 by chxaitz */
+                log_buf[log_len++]=' ';                                         /* be added   at 2015-06-04 17:09 by chxaitz */
+            } else if (elog.enabled_fmt_set[level]&(ELOG_FMT_LINE)) {
+//                log_len += elog_strcpy(log_len, log_buf + log_len, ":");      /* be deleted at 2015-06-04 17:09 by chxaitz */
+              log_buf[log_len++]=':';                                           /* be added   at 2015-06-04 17:09 by chxaitz */
             }
         }
         /* package process info */
-        if (get_fmt_enabled(ELOG_FMT_FUNC)) {
+        if (elog.enabled_fmt_set[level]&(ELOG_FMT_FUNC)) {
             log_len += elog_strcpy(log_len, log_buf + log_len, func);
-            if (get_fmt_enabled(ELOG_FMT_LINE)) {
-                log_len += elog_strcpy(log_len, log_buf + log_len, ":");
+            if (elog.enabled_fmt_set[level]&(ELOG_FMT_LINE)) {
+//                log_len += elog_strcpy(log_len, log_buf + log_len, ":");      /* be deleted at 2015-06-04 17:09 by chxaitz */
+              log_buf[log_len++]=':';
             }
         }
         /* package thread info */
-        if (get_fmt_enabled(ELOG_FMT_LINE)) {
-            //TODO snprintf资源占用可能较高，待优化
-            snprintf(line_num, ELOG_LINE_NUM_MAX_LEN, "%ld", line);
-            log_len += elog_strcpy(log_len, log_buf + log_len, line_num);
+        if (elog.enabled_fmt_set[level]&(ELOG_FMT_LINE)) {
+            //TODO snprintf璧勬簮鍗犵敤鍙兘杈冮珮锛屽緟浼樺寲
+//            snprintf(line_num, ELOG_LINE_NUM_MAX_LEN, "%ld", line);           /* be deleted at 2015-06-04 17:09 by chxaitz */
+//            log_len += elog_strcpy(log_len, log_buf + log_len, line_num);     /* be deleted at 2015-06-04 17:09 by chxaitz */
+          log_len += elog_u32_to_str(log_buf + log_len, line);                  /* be added   at 2015-06-04 17:09 by chxaitz */
         }
-        log_len += elog_strcpy(log_len, log_buf + log_len, ")");
+//        log_len += elog_strcpy(log_len, log_buf + log_len, ")");              /* be deleted at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len++]=')';                                                 /* be added   at 2015-06-04 17:09 by chxaitz */
     }
 
     /* add space and colon sign */
     if (log_len != 0) {
-        log_len += elog_strcpy(log_len, log_buf + log_len, ": ");
+//        log_len += elog_strcpy(log_len, log_buf + log_len, ": ");             /* be deleted at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len++]=':';log_buf[log_len++]=' ';                          /* be added   at 2015-06-04 17:09 by chxaitz */
     }
 
+    /* args point to the first variable parameter */
+    va_start(args, format);
+    
     /* package other log data to buffer. CRLF length is 2. '\0' must be added in the end by vsnprintf. */
     fmt_result = vsnprintf(log_buf + log_len, ELOG_BUF_SIZE - log_len - 2 + 1, format, args);
 
     va_end(args);
 
-    /* keyword filter */
-    if (!strstr(log_buf, elog.filter.keyword)) {
-        //TODO 可以考虑采用KMP及朴素模式匹配字符串，提升性能
-        /* unlock output */
-        elog_port_output_unlock();
-        return;
-    }
-
     /* package CRLF */
     if ((fmt_result > -1) && (fmt_result + log_len + 2 <= ELOG_BUF_SIZE)) {
         log_len += fmt_result;
-        log_len += elog_strcpy(log_len, log_buf + log_len, "\r\n");
+//        log_len += elog_strcpy(log_len, log_buf + log_len, "\r\n");           /* be deleted at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len++]='\r';log_buf[log_len++]='\n';                        /* be added   at 2015-06-04 17:09 by chxaitz */
+        log_buf[log_len] = '\0';
 
     } else {
-        log_buf[ELOG_BUF_SIZE - 2] = '\r';
-        log_buf[ELOG_BUF_SIZE - 1] = '\n';
+        log_buf[ELOG_BUF_SIZE - 3] = '\r';
+        log_buf[ELOG_BUF_SIZE - 2] = '\n';
+        log_buf[ELOG_BUF_SIZE - 1] = '\0';
     }
 
     /* output log */
-    elog_port_output(log_buf, log_len);
+//    elog_port_output(log_buf, log_len);                                       /* be deleted at 2015-06-04 17:09 by chxaitz */
+    
+    /* add log to log_nodes list */                                             /* be added   at 2015-06-04 17:09 by chxaitz */
+    elog_node *px_eln;
+    if((px_eln = (elog_node*)_elog_malloc( sizeof(elog)+log_len ))!=NULL)
+    {
+      /* init the node */
+      px_eln->pNext = NULL;
+      px_eln->len   = log_len;
+      memcpy( px_eln->Data, log_buf, log_len );
+      
+      /* add to the logs' list */
+      _elog_enter_critical();
+      if( elog_list_head == NULL )       //empty list
+      {
+        elog_list_head = px_eln;
+        elog_list_tail = px_eln;
+      }
+      else/* unempty list */
+      {
+        elog_list_tail->pNext = px_eln;
+        elog_list_tail        = px_eln;
+      }
+      _elog_exit_critical();
+      /* update some data */
+      elog_nodes_count++;
+      elog_take_sapce+=log_len;
+    }
 
     /* unlock output */
-    elog_port_output_unlock();
+    elog_port_rel_grant(elog_sobj);
 }
-
+/* be added   at 2015-06-04 17:09 by chxaitz */
 /**
- * get format enabled
- *
- * @param set format set
- *
- * @return enable or disable
+ * used to get the space logs takes current
  */
-static bool get_fmt_enabled(size_t set) {
-    if (elog.enabled_fmt_set & set) {
-        return true;
-    } else {
-        return false;
+size_t elog_get_take_mem()
+{
+  return elog_take_sapce;
+}
+/* be added   at 2015-06-04 17:09 by chxaitz */
+/**
+ * used to get the logs' num current
+ */
+size_t elog_get_logs_num()
+{
+  return elog_nodes_count;
+}
+/* be added   at 2015-06-04 17:09 by chxaitz */
+/**
+ * used to output the logs
+ */
+void elog_output()
+{
+  if( ELOG_NO_ERR == elog_port_open() )
+  {
+    void *p;
+    while( elog_list_head )
+    {
+      if( elog.filter.keyword[0] )
+      { /* keyword filter */
+        if( elog_kw_strstr(elog_list_head->Data, elog.filter.keyword, pc_elog_kw_alpha) != -1 )
+          elog_port_write( elog_list_head->Data, elog_list_head->len );
+      }
+      else
+        elog_port_write( elog_list_head->Data, elog_list_head->len );
+      p = elog_list_head;
+      _elog_enter_critical();
+      /* update some data */
+      elog_nodes_count--;
+      elog_take_sapce-=elog_list_head->len;
+      /* update logs' list */
+      elog_list_head = elog_list_head->pNext;
+      if( NULL == elog_list_head ) elog_list_tail = NULL;
+      _elog_exit_critical();
+      _elog_free( p );
     }
+    elog_port_close();
+  }
+  else  /* if failed to open the device , free all logs taked space */
+  {
+    void *p;
+    while( elog_list_head )
+    {
+      p = elog_list_head;
+      _elog_enter_critical();
+      /* update some data */
+      elog_nodes_count--;
+      elog_take_sapce-=elog_list_head->len;
+      /* update logs' list */
+      elog_list_head = elog_list_head->pNext;
+      if( NULL == elog_list_head ) elog_list_tail = NULL;
+      _elog_exit_critical();
+      _elog_free( p );
+    }
+  }
 }

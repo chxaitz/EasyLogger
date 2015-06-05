@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "coll_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -48,10 +49,15 @@ extern "C" {
 #define ELOG_LINE_NUM_MAX_LEN                5
 /* log buffer size */
 #define ELOG_BUF_SIZE                        256
+#define ELOG_BUF_SIZE_BASE                   128
 /* output filter's tag max length */
 #define ELOG_FILTER_TAG_MAX_LEN              16
 /* output filter's keyword max length */
 #define ELOG_FILTER_KW_MAX_LEN               16
+/* keyword alpha len max */
+#define ELOG_TG_ALPHA_MAX_LEN                96 /* do not exchange this two define*/
+#define ELOG_KW_ALPHA_MAX_LEN                96
+#define ELOG_KW_ALPHA_BASE                   32
 /* EasyLogger software version number */
 #define ELOG_SW_VERSION                      "0.05.25"
 
@@ -78,20 +84,25 @@ typedef enum {
 /* EasyLogger error code */
 typedef enum {
     ELOG_NO_ERR,
+    ELOG_ERR,
 } ElogErrCode;
 
 /* elog.c */
 ElogErrCode elog_init(void);
 void elog_set_output_enabled(bool enabled);
 bool elog_get_output_enabled(void);
-void elog_set_fmt(size_t set);
+void elog_set_fmt(uint8_t level, uint8_t set);
 void elog_set_filter(uint8_t level, const char *tag, const char *keyword);
 void elog_set_filter_lvl(uint8_t level);
 void elog_set_filter_tag(const char *tag);
 void elog_set_filter_kw(const char *keyword);
 void elog_raw(const char *format, ...);
-void elog_output(uint8_t level, const char *tag, const char *file, const char *func,
+void elog_add(uint8_t level, const char *tag, const char *file, const char *func,
         const long line, const char *format, ...);
+
+void        elog_output();      /* used to output the logs */
+size_t elog_get_take_mem();     /* used to get the space logs takes current */
+size_t elog_get_logs_num();     /* used to get the logs' num current */
 
 #ifndef ELOG_OUTPUT_ENABLE
 
@@ -106,57 +117,72 @@ void elog_output(uint8_t level, const char *tag, const char *file, const char *f
 
 #if ELOG_OUTPUT_LVL >= ELOG_LVL_ASSERT
 #define elog_a(tag, ...) \
-        elog_output(ELOG_LVL_ASSERT, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+        elog_add(ELOG_LVL_ASSERT, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #else
 #define elog_a(tag, ...)
 #endif
 
 #if ELOG_OUTPUT_LVL >= ELOG_LVL_ERROR
 #define elog_e(tag, ...) \
-        elog_output(ELOG_LVL_ERROR, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+        elog_add(ELOG_LVL_ERROR, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #else
 #define elog_e(tag, ...)
 #endif
 
 #if ELOG_OUTPUT_LVL >= ELOG_LVL_WARN
 #define elog_w(tag, ...) \
-        elog_output(ELOG_LVL_WARN, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+        elog_add(ELOG_LVL_WARN, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #else
 #define elog_w(tag, ...)
 #endif
 
 #if ELOG_OUTPUT_LVL >= ELOG_LVL_INFO
 #define elog_i(tag, ...) \
-        elog_output(ELOG_LVL_INFO, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+        elog_add(ELOG_LVL_INFO, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #else
 #define elog_i(tag, ...)
 #endif
 
 #if ELOG_OUTPUT_LVL >= ELOG_LVL_DEBUG
 #define elog_d(tag, ...) \
-        elog_output(ELOG_LVL_DEBUG, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+        elog_add(ELOG_LVL_DEBUG, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #else
 #define elog_d(tag, ...)
 #endif
 
 #if ELOG_OUTPUT_LVL == ELOG_LVL_VERBOSE
 #define elog_v(tag, ...) \
-        elog_output(ELOG_LVL_VERBOSE, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+        elog_add(ELOG_LVL_VERBOSE, tag, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #endif
 
 #endif /* ELOG_OUTPUT_ENABLE */
 
 /* elog_utils.c */
 size_t elog_strcpy(size_t cur_len, char *dst, const char *src);
+size_t elog_u32_to_str(char *buf, size_t val);
+int elog_kw_alpha_set( char *src, const char *des );
+int elog_kw_strstr(const char *src, const char *des, const char *alpha);
 
 /* elog_port.c */
+#define	_ELOG_SYNC_t			      xSemaphoreHandle
 ElogErrCode elog_port_init(void);
 void elog_port_output(const char *output, size_t size);
-void elog_port_output_lock(void);
-void elog_port_output_unlock(void);
 const char *elog_port_get_time(void);
 const char *elog_port_get_p_info(void);
 const char *elog_port_get_t_info(void);
+int  elog_port_cre_syncobj (_ELOG_SYNC_t* sobj);	                        /* Create a sync object */
+int  elog_port_req_grant   (_ELOG_SYNC_t sobj);				        /* Lock sync object */
+void elog_port_rel_grant   (_ELOG_SYNC_t sobj);				        /* Unlock sync object */
+int  elog_port_del_syncobj (_ELOG_SYNC_t sobj);				        /* Delete a sync object */
+
+ElogErrCode elog_port_open();
+ElogErrCode elog_port_close();
+ElogErrCode elog_port_write( char *buf, size_t len );
+
+#define _elog_malloc(a)         pvPortMalloc(a)
+#define _elog_free(a)           vPortFree(a)
+#define _elog_enter_critical()  taskENTER_CRITICAL()
+#define _elog_exit_critical()   taskEXIT_CRITICAL()
 
 #ifdef __cplusplus
 }
