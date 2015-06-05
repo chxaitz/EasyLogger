@@ -209,23 +209,43 @@ void elog_raw(const char *format, ...) {
     va_start(args, format);
 
     /* lock output */
-//    elog_port_output_lock();
     elog_port_req_grant(elog_sobj);
 
     /* package log data to buffer */
     fmt_result = vsnprintf(log_buf, ELOG_BUF_SIZE, format, args);
 
     /* output converted log */
-    if ((fmt_result > -1) && (fmt_result <= ELOG_BUF_SIZE)) {
-        /* output log */
-        elog_port_output(log_buf, fmt_result);
-    } else {
-        /* output log */
-        elog_port_output(log_buf, ELOG_BUF_SIZE);
+    if ((fmt_result > -1) && (fmt_result < ELOG_BUF_SIZE)) {
+      log_buf[fmt_result++]='\0';
+      /* add log to log_nodes list */                                           /* be added   at 2015-06-04 17:09 by chxaitz */
+      elog_node *px_eln;
+      if((px_eln = (elog_node*)_elog_malloc( sizeof(elog)+fmt_result ))!=NULL)
+      {
+        /* init the node */
+        px_eln->pNext = NULL;
+        px_eln->len   = fmt_result;
+        memcpy( px_eln->Data, log_buf, fmt_result );
+        
+        /* add to the logs' list */
+        _elog_enter_critical();
+        if( elog_list_head == NULL )       //empty list
+        {
+          elog_list_head = px_eln;
+          elog_list_tail = px_eln;
+        }
+        else/* unempty list */
+        {
+          elog_list_tail->pNext = px_eln;
+          elog_list_tail        = px_eln;
+        }
+        _elog_exit_critical();
+        /* update some data */
+        elog_nodes_count++;
+        elog_take_sapce+=fmt_result;
+      }
     }
 
     /* unlock output */
-//    elog_port_output_unlock();
     elog_port_rel_grant(elog_sobj);
 
     va_end(args);
@@ -267,7 +287,6 @@ void elog_add(uint8_t level, const char *tag, const char *file, const char *func
     }
 
     /* lock output */
-//    elog_port_output_lock();
     elog_port_req_grant(elog_sobj);
     /* package level info */
     if (elog.enabled_fmt_set[level]&(ELOG_FMT_LVL)) {
@@ -403,7 +422,6 @@ void elog_add(uint8_t level, const char *tag, const char *file, const char *func
     }
 
     /* unlock output */
-//    elog_port_output_unlock();
     elog_port_rel_grant(elog_sobj);
 }
 /* be added   at 2015-06-04 17:09 by chxaitz */
@@ -451,5 +469,6 @@ void elog_output()
       _elog_exit_critical();
       _elog_free( p );
     }
+    elog_port_close();
   }
 }
