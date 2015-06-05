@@ -94,7 +94,7 @@ ElogErrCode elog_init(void) {
     elog_set_output_enabled(true);
 
     /* create sync obj*/
-    elog_port_cre_syncobj ( elog_sobj );
+    elog_port_cre_syncobj ( &elog_sobj );
     
     if (result == ELOG_NO_ERR) {
         elog_d(tag, "EasyLogger V%s is initialize success.", ELOG_SW_VERSION);
@@ -112,7 +112,18 @@ ElogErrCode elog_init(void) {
 void elog_set_output_enabled(bool enabled) {
     ELOG_ASSERT((enabled == false) || (enabled == true));
 
-    elog.output_enabled = enabled;
+    if( elog.output_enabled != enabled ) /* not equ */
+    {
+      if( false == enabled )    /* close the elog */
+      { 
+        /* if need to free the kw_filter space? */
+        /* compulsory to write the logs to the stream and free the taked space */
+        elog_output();
+      }
+      else      /* open the elog */
+      {/* nothing need to do */}
+      elog.output_enabled = enabled;
+    }
 }
 
 /**
@@ -470,5 +481,22 @@ void elog_output()
       _elog_free( p );
     }
     elog_port_close();
+  }
+  else  /* if failed to open the device , free all logs taked space */
+  {
+    void *p;
+    while( elog_list_head )
+    {
+      p = elog_list_head;
+      _elog_enter_critical();
+      /* update some data */
+      elog_nodes_count--;
+      elog_take_sapce-=elog_list_head->len;
+      /* update logs' list */
+      elog_list_head = elog_list_head->pNext;
+      if( NULL == elog_list_head ) elog_list_tail = NULL;
+      _elog_exit_critical();
+      _elog_free( p );
+    }
   }
 }
